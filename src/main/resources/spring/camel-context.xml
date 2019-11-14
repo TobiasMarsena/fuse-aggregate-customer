@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="        http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd        http://camel.apache.org/schema/spring       http://camel.apache.org/schema/spring/camel-spring.xsd">
+    <camelContext id="camel" xmlns="http://camel.apache.org/schema/spring">
+        <dataFormats>
+            <json allowJmsType="true" allowUnmarshallType="true"
+                contentTypeHeader="false"
+                enableJaxbAnnotationModule="false" id="customerResp"
+                library="Jackson" prettyPrint="false"
+                unmarshalTypeName="org.mycompany.CustomerResponse"
+                useDefaultObjectMapper="true" useList="false"/>
+        </dataFormats>
+        <restConfiguration bindingMode="json" component="restlet" port="8080"/>
+        <rest id="rest-7b26dd06-286f-4953-8363-91c8c0b5cfcc">
+            <get id="cbb46224-5371-487e-914d-fc7685ab6902" uri="/api/customer/complete">
+                <to uri="direct:completeCustomer"/>
+            </get>
+        </rest>
+        <!-- Master route -->
+        <route id="aggregate-customer-route">
+            <from id="_from1" uri="direct:completeCustomer"/>
+            <to id="_to9" uri="direct:customerDataFromCache"/>
+            <log id="_log5" message="body from cache >> ${body}"/>
+            <choice id="_choice1">
+                <when id="_when1">
+                    <simple>${body} == null</simple>
+                    <log id="_log7" message="cache is null, calling rest service"/>
+                    <to id="_to3" uri="direct:getBasicCustomer"/>
+                    <to id="_to4" uri="direct:getDetails"/>
+                    <!-- aggregate result -->
+                    <bean beanType="org.mycompany.CustomerAggregator"
+                        cache="false" id="_bean1" method="process"/>
+                    <!-- Save to JDG cache -->
+                    <to id="_to10" uri="direct:customerDataToCache"/>
+                </when>
+                <!-- <otherwise id="_otherwise1">
+                    <log id="_log9" message="get data from cache >> ${header.CamelInfinispanOperationResult}"/>
+                    <setBody id="_setBody1">
+                        <simple>${header.CamelInfinispanOperationResult}</simple>
+                    </setBody>
+                    <convertBodyTo type="java.lang.String"/>
+                    <unmarshal ref="customerResp"/>
+                </otherwise> -->
+            </choice>
+            <log id="_log2" message="return body: ${body}"/>
+        </route>
+        <!-- get customer basic from REST -->
+        <route id="basic-customer-route">
+            <from id="_to5" uri="direct:getBasicCustomer"/>
+            <to id="_to1" uri="restlet:http://{{rest.customer.url}}:80/api/customer"/>
+            <log id="_log1" message="from REST customer basic >>> ${body}"/>
+            <unmarshal id="_unmarshal1" ref="customerResp"/>
+            <setProperty id="_setProperty1" propertyName="customerResponse">
+                <simple>${body}</simple>
+            </setProperty>
+        </route>
+        <!-- get customer detail from REST -->
+        <route id="detail-customer-route">
+            <from id="_to6" uri="direct:getDetails"/>
+            <to id="_to2" uri="restlet:http://{{rest.customer.detail.url}}:80/api/customer/detail"/>
+            <log id="_log3" message="from REST customer detail >>> ${body}"/>
+            <unmarshal id="_unmarshal2" ref="customerResp"/>
+        </route>
+        <!-- return void: save data to JDG. return Customer Object on Body -->
+        <route id="customer-data-to-cache">
+            <from id="_from2" uri="direct:customerDataToCache"/>
+            <marshal id="_marshal1">
+                <json library="Jackson"/>
+            </marshal>
+            <convertBodyTo id="_convertBodyTo1" type="java.lang.String"/>
+            <setHeader headerName="CamelInfinispanOperation" id="_setHeader1">
+                <constant>CamelInfinispanOperationPut</constant>
+            </setHeader>
+            <setHeader headerName="CamelInfinispanValue" id="_setHeader2">
+                <simple>${body}</simple>
+            </setHeader>
+            <setHeader headerName="CamelInfinispanKey" id="_setHeader3">
+                <constant>allCustomer</constant>
+            </setHeader>
+            <setHeader headerName="CamelInfinispanLifespanTime" id="_setHeader7">
+                <constant>10000</constant>
+            </setHeader>
+            <to id="_to7" uri="infinispan://{{jdg.url}}"/>
+            <unmarshal id="_unmarshal3" ref="customerResp"/>
+            <log id="_log4" message="Success save to cache jboss data grid: ${body}"/>
+        </route>
+        <!-- return Customer object on body -->
+        <route id="customer-cache-to-data">
+            <from id="_from3" uri="direct:customerDataFromCache"/>
+            <setHeader headerName="CamelInfinispanOperation" id="_setHeader4">
+                <constant>CamelInfinispanOperationGet</constant>
+            </setHeader>
+            <setHeader headerName="CamelInfinispanKey" id="_setHeader5">
+                <constant>allCustomer</constant>
+            </setHeader>
+            <to id="_to8" uri="infinispan://{{jdg.url}}"/>
+            <setBody id="_setBody1">
+                <simple>${header.CamelInfinispanOperationResult}</simple>
+            </setBody>
+            <choice id="_choice2">
+                <when id="_when2">
+                    <simple>${${header.CamelInfinispanOperationResult}} != null</simple>
+                    <convertBodyTo id="_convertBodyTo2" type="java.lang.String"/>
+                    <unmarshal id="_unmarshal4" ref="customerResp"/>
+                </when>
+            </choice>
+            <log id="_log6" message="Get customer data from JDG: ${body}"/>
+        </route>
+        <!-- <route id="customer-data-to-cache">
+            <from id="_from2" uri="timer:tempTimer?fixedRate=true&amp;period=60000"/>
+            <log id="_log5" message="timer on ${header.firedTime}"/>
+            <setBody id="_setBody1">
+                <simple>Hello from timer at ${header.firedTime}</simple>
+            </setBody>
+            <setHeader headerName="CamelInfinispanOperation" id="_setHeader1">
+                <constant>CamelInfinispanOperationPut</constant>
+            </setHeader>
+            <setHeader headerName="CamelInfinispanValue" id="_setHeader2">
+                <simple>${body}</simple>
+            </setHeader>
+            <setHeader headerName="CamelInfinispanKey" id="_setHeader3">
+                <constant>allCustomer</constant>
+            </setHeader>
+            <to id="_to7" uri="infinispan://{{jdg.url}}"/>
+            <log id="_log6" message="result >>> ${header.CamelInfinispanOperationResult}"/>
+        </route>
+        -->
+        <!-- <route id="timer-customer-cache">
+            <from id="_from4" uri="timer:tempTimer?fixedRate=true&amp;period=30000"/>
+            <log id="_log10" message="timer on ${header.firedTime}"/>
+            <setBody id="_setBody2">
+                <simple>Hello from timer at ${header.firedTime}</simple>
+            </setBody>
+            <setHeader headerName="CamelInfinispanOperation" id="_setHeader6">
+                <constant>CamelInfinispanOperationGet</constant>
+            </setHeader>
+            <setHeader headerName="CamelInfinispanKey" id="_setHeader8">
+                <constant>allCustomer</constant>
+            </setHeader>
+            <to id="_to11" uri="infinispan://{{jdg.url}}"/>
+            <log id="_log11" message="result body >>> ${body}"/>
+            <log id="_log12" message="result result >>> ${header.CamelInfinispanOperationResult}"/>
+        </route> -->
+    </camelContext>
+</beans>
